@@ -4,6 +4,7 @@ import logging
 import json
 from urllib.parse import urlparse, parse_qs
 from dotenv import dotenv_values
+from typing import Optional, Dict, Any
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -35,26 +36,32 @@ def get_kite_client(api_key, access_token=None):
         kc.set_access_token(access_token)
     return kc
 
-def save_access_token(token, path):
+def save_access_token(token: str, path: str):
     """Saves the access token to a JSON file."""
     try:
+        # Ensure the directory exists
+        directory = os.path.dirname(path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
+        
         with open(path, "w") as f:
             json.dump({"access_token": token}, f)
         logger.info("New access token successfully saved to file.")
     except Exception as e:
         logger.error(f"Failed to write access token to file: {e}")
 
-def load_access_token(path):
+def load_access_token(path: str) -> Optional[str]:
     """Loads a saved access token from a JSON file."""
+    if not os.path.exists(path):
+        return None
     try:
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                data = json.load(f)
-                return data.get("access_token")
+        with open(path, "r") as f:
+            data = json.load(f)
+            return data.get("access_token")
     except Exception as e:
-        logger.error(f"Failed to load access token from file: {e}")
-    return None
-
+        logger.warning(f"Failed to load access token from file: {e}")
+        return None
+        
 def login(settings: dict):
     """
     Main function to handle the entire login flow.
@@ -67,19 +74,19 @@ def login(settings: dict):
     # NOTE: Assuming secrets like ZERODHA_API_KEY, USERNAME, PASSWORD, TOTP_SECRET, and ACCESS_TOKEN_PATH 
     # are loaded via .env and available in the global `config` object initialized above.
     # In a more robust system, all secrets would be explicitly passed via `settings`.
-    API_KEY = config.get("ZERODHA_API_KEY")
-    API_SECRET = config.get("ZERODHA_API_SECRET")
-    ACCESS_TOKEN_PATH = config.get("ACCESS_TOKEN_PATH", "access_token.json")
-
-    if not API_KEY or not API_SECRET:
-        logger.error("ZERODHA_API_KEY or ZERODHA_API_SECRET not found in environment.")
+    try:
+        api_key = config["ZERODHA_API_KEY"]
+        api_secret = config["ZERODHA_API_SECRET"]
+        access_token_path = config.get("ZERODHA_ACCESS_TOKEN_PATH", "temp/kite_access_token.json")
+    except KeyError as e:
+        logger.critical(f"Missing critical configuration key in .env: {e}. Cannot proceed with login.")
         return None
-
+    
     # 2. Check for an existing, valid access token
-    access_token = load_access_token(ACCESS_TOKEN_PATH)
+    access_token = load_access_token(access_token_path)
     if access_token:
         logger.info("Access token file found, attempting to validate...")
-        kc = get_kite_client(API_KEY, access_token)
+        kc = get_kite_client(api_key, access_token)
         try:
             profile = kc.profile()
             if profile:
@@ -90,7 +97,7 @@ def login(settings: dict):
 
     # 3. If no valid token, perform a new login
     logger.info("Performing new login to obtain access token.")
-    return execute_manual_login(API_KEY, API_SECRET, ACCESS_TOKEN_PATH)
+    return execute_manual_login(api_key, api_secret, access_token_path)
 
 def execute_manual_login(api_key, api_secret, access_token_path):
     """
@@ -129,7 +136,7 @@ def perform_selenium_login(target_url):
         str: The request_token from the final redirect URL.
     """
     options = Options()
-    # options.add_argument("--headless")
+    options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")

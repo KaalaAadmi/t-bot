@@ -62,15 +62,17 @@ def get_initial_universe_map(kc_client: Any, settings: Dict) -> Dict[str, int]:
         
     return universe_map
 
-# --- New Function for Scheduled Login ---
-def scheduled_login_wrapper(settings):
+# --- Modified Function for Scheduled Login ---
+# Now accepts settings as an argument
+def scheduled_login_wrapper(settings: Dict[str, Any]):
     """
     Synchronous wrapper for login() to be called by APScheduler.
-    This refreshes the token and saves it to a file, which the agent will pick up.
+    This refreshes the token and saves it to a file.
     """
     logger.info("Attempting scheduled token refresh at 8:00 AM IST...")
     try:
-        kc = login(settings)
+        # Pass the settings to the login function
+        kc = login(settings=settings) 
         if kc:
             logger.info("Daily Login successful. Access Token refreshed and saved.")
         else:
@@ -101,13 +103,16 @@ async def main():
     tz = pytz.timezone('Asia/Kolkata')
     scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.add_job(
-        scheduled_login_wrapper(settings), 
+        # PASS the function reference, NOT the result of calling it
+        scheduled_login_wrapper, 
         'cron', 
         day_of_week='mon-fri', 
         hour=8, 
         minute=0, 
         second=0,
-        name='Daily_Login_Token_Refresh'
+        name='Daily_Login_Token_Refresh',
+        # Pass the settings dictionary as the function's argument
+        kwargs={'settings': settings} 
     )
     scheduler.start()
     logger.info("Daily Login/Token Refresh scheduled for weekdays at 08:00 AM IST.")
@@ -160,7 +165,7 @@ async def main():
         second=0,
         name='Daily_Universe_Update'
     )
-    scheduler.start()
+    # scheduler.start()
     logger.info("Universe Agent scheduled to run weekdays at 8:00 AM IST.")
     
     # 9. Initialize and Run Data Collector Agent
