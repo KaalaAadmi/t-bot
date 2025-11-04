@@ -1,0 +1,16 @@
+[project]
+name = "t-bot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "apscheduler>=3.11.1",
+    "dotenv>=0.9.9",
+    "kiteconnect>=5.0.1",
+    "pandas>=2.3.3",
+    "psycopg2-binary>=2.9.11",
+    "pyotp>=2.9.0",
+    "redis>=7.0.1",
+    "selenium>=4.38.0",
+]

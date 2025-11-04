@@ -1,0 +1,95 @@
+# Database Configuration
+database:
+  user: ${POSTGRES_USER}
+  password: ${POSTGRES_PASSWORD}
+  db: ${POSTGRES_DB}
+  host: ${POSTGRES_HOST}
+  port: ${POSTGRES_PORT}
+
+# Redis Configuration
+redis:
+  host: ${REDIS_HOST}
+  port: ${REDIS_PORT}
+  db: ${REDIS_DB}
+
+streams:
+  ticker_universe: "ticker_universe"
+  # New stream for Open Range Breakout data
+  orb_range_data: "orb_range_data"
+  range_defined: "range_defined"
+  one_min_candle_data: "1min_candle_data"
+  trade_signal: "trade_signal"
+  order_request: "order_request"
+  order_fill: "order_fill"
+  trade_closed: "trade_closed"
+  journaling: "journaling_updates"
+
+position_tracker:
+  monitor_interval: 60 # Interval (in seconds) to check open positions
+
+performance_measurer:
+  interval_seconds: 3600 # Interval (in seconds) to calculate performance metrics
+
+# Prometheus Configuration
+prometheus:
+  host: ${PROMETHEUS_HOST}
+  port: ${PROMETHEUS_PORT}
+
+# Grafana Configuration
+grafana:
+  host: ${GRAFANA_HOST}
+  port: ${GRAFANA_PORT}
+
+# Logging Configuration
+logging:
+  level: ${LOG_LEVEL}
+
+# General Application Settings
+environment: ${ENVIRONMENT:-development} # <-- ENSURE THIS EXISTS (or similar)
+# development -> backtesting
+# live -> testing in live market(all of the signals, for data)
+# live_functional -> testing in live market (with the ConfidenceProviderAgent, and correct implementation of PortfolioManagerAgent)
+# production -> executes trades in the live market
+
+# Portfolio Configuration
+portfolio:
+  initial_balance: 10000.0 # Example
+  max_risk_per_trade_pct: 0.01 # 1% risk per trade (used in production mode)
+  dev_position_size_usd: 100.0 # <-- ADD THIS LINE (Fixed USD size for dev mode)
+
+# Other Configuration
+agents:
+  market_research:
+    enabled: true
+    volume_threshold:
+    stocks: 1000000 # 1M shares/day
+    crypto: 10000000 # $10M/day
+    volatility_threshold: 0.02 # 2% daily volatility
+    price_change_threshold: 0.02 # ±2% price change in the last 5 days
+    min_price:
+    stocks: 1 # $1
+    crypto: 0.05 # $0.05
+  technical_analysis:
+    enabled: true
+  risk_manager:
+    enabled: true
+  portfolio_manager:
+    enabled: true
+
+tickers:
+  file_path: "data/tickers.json"
+
+timeframes:
+  htf: "1h"
+  ltf: "5m"
+
+history:
+  htf_lookback_days: 30
+  ltf_lookback_days: 7
+  htf_interval_minutes: 60
+  ltf_interval_minutes: 5
+
+fvg:
+  atr_period: 14
+  atr_multiplier: 1.5
+  min_pct_price: 0.005 # 1% of the price

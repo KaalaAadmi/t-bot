@@ -1,0 +1,88 @@
+# --- 1. POSTGRES DATABASE ---
+
+postgres_db:
+  image: postgres:14-alpine
+  container_name: tbot_postgres
+  restart: always
+  environment:
+    # These variables must match the POSTGRES_ values in your .env file
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_DB: ${POSTGRES_DB}
+  volumes:
+    # Persist data across container restarts
+    - postgres_data:/var/lib/postgresql/data
+  ports:
+    # Expose the port so you can connect from outside the container (e.g., using an SQL tool)
+    - "5432:5432"
+  networks:
+    - tbot_network
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+    interval: 5s
+    timeout: 5s
+    retries: 5
+
+# --- 2. REDIS CACHE (for Streams) ---
+redis_cache:
+  image: redis:7-alpine
+  container_name: tbot_redis
+  restart: always
+  ports:
+    # Expose the port
+    - "6379:6379"
+  volumes:
+    # Persist data across container restarts
+    - redis_data:/data
+  networks:
+    - tbot_network
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 5s
+    timeout: 5s
+    retries: 5
+
+# --- 3. PYTHON APPLICATION (Your Bot) ---
+
+# This service is where your main.py would run, consuming the containers above
+
+# app:
+#   # Use your base image (e.g., python:3.10-slim) or build your local Dockerfile
+#   # build: .
+#   image: python:3.10-slim
+#   container_name: tbot_app
+#   # Set the working directory
+#   working_dir: /app
+#   # Mount your local code into the container
+#   volumes:
+#     - .:/app
+#   environment:
+#     # Load all environment variables defined in .env
+#     - POSTGRES_USER
+#     - POSTGRES_PASSWORD
+#     - POSTGRES_DB
+#     - POSTGRES_HOST
+#     - POSTGRES_PORT
+#     - REDIS_HOST
+#     - REDIS_PORT
+#     - REDIS_DB
+#   # ... other required environment variables for Zerodha/config ...
+#   # Link to the services it depends on
+#   depends_on:
+#     postgres_db:
+#       condition: service_healthy
+#     redis_cache:
+#       condition: service_healthy
+#   networks:
+#     - tbot_network
+#   # command: python main.py # The command to run your app
+
+# --- Docker Volumes for Persistent Data ---
+volumes:
+  postgres_data:
+  redis_data:
+
+# --- Docker Network for Inter-Container Communication ---
+networks:
+  tbot_network:
+    driver: bridge
