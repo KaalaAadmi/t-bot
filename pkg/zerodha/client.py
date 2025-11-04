@@ -129,7 +129,7 @@ def perform_selenium_login(target_url):
         str: The request_token from the final redirect URL.
     """
     options = Options()
-    options.add_argument("--headless")
+    # options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -151,7 +151,7 @@ def perform_selenium_login(target_url):
         driver.find_element(By.ID, "userid").send_keys(str(config["ZERODHA_USERNAME"]))
         driver.find_element(By.ID, "password").send_keys(str(config["ZERODHA_PASSWORD"]))
         driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-        
+        time.sleep(2)  # Brief pause to allow for transition
         # Generate the TOTP code
         totp = pyotp.TOTP(str(config["ZERODHA_TOTP_SECRET"]))
         passcode = totp.now()

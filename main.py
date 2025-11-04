@@ -18,7 +18,7 @@ from agents.universe.universe_agent import UniverseAgent # <--- NEW IMPORT
 logger = logging.getLogger(__name__) 
 
 # Initialize logger (needs to be done before agent initialization)
-def setup_logging(config_path="config/logging_config.yaml"):
+def setup_logging(config_path="pkg/config/logging_config.yaml"):
     """Setup logging configuration."""
     if not os.path.exists(config_path):
         # Fallback if running from a different directory structure
@@ -62,10 +62,26 @@ def get_initial_universe_map(kc_client: Any, settings: Dict) -> Dict[str, int]:
         
     return universe_map
 
+# --- New Function for Scheduled Login ---
+def scheduled_login_wrapper(settings):
+    """
+    Synchronous wrapper for login() to be called by APScheduler.
+    This refreshes the token and saves it to a file, which the agent will pick up.
+    """
+    logger.info("Attempting scheduled token refresh at 8:00 AM IST...")
+    try:
+        kc = login(settings)
+        if kc:
+            logger.info("Daily Login successful. Access Token refreshed and saved.")
+        else:
+            logger.error("Daily Login failed. No access token refresh.")
+    except Exception as e:
+        logger.error(f"Error during scheduled login: {e}")
+# ----------------------------------------
 
 async def main():
     """Main function to orchestrate the bot and start all agents."""
-    
+    global logger
     # 1. Setup Logging
     logger = setup_logging()
     logger.info("--- T-Bot Application Starting ---")
@@ -80,6 +96,22 @@ async def main():
         logger.error("Zerodha login failed. Shutting down application.")
         return
     logger.info("Zerodha login successful. KiteConnect client initialized.")
+    
+    # 3.a Setup Scheduler for Daily Tasks
+    tz = pytz.timezone('Asia/Kolkata')
+    scheduler = AsyncIOScheduler(timezone=tz)
+    scheduler.add_job(
+        scheduled_login_wrapper(settings), 
+        'cron', 
+        day_of_week='mon-fri', 
+        hour=8, 
+        minute=0, 
+        second=0,
+        name='Daily_Login_Token_Refresh'
+    )
+    scheduler.start()
+    logger.info("Daily Login/Token Refresh scheduled for weekdays at 08:00 AM IST.")
+    
     
     # 4. Initialize and Verify Redis Client
     redis_settings = settings['redis']
@@ -114,10 +146,6 @@ async def main():
     except RuntimeError:
         db_connector.close()
         return
-
-    # 8. Setup Scheduler for Periodic Universe Updates
-    tz = pytz.timezone('Asia/Kolkata')
-    scheduler = AsyncIOScheduler(timezone=tz)
     
     # Instantiate the Universe Agent once for scheduling
     universe_agent_scheduled = UniverseAgent(kc_client=kc, settings=settings)
@@ -128,7 +156,7 @@ async def main():
         'cron', 
         day_of_week='mon-fri', 
         hour=8, 
-        minute=0, 
+        minute=5, 
         second=0,
         name='Daily_Universe_Update'
     )

@@ -5,3 +5,12 @@
 __pycache__/
 *.sqlite3
 *.db
+.env
+.env.*
+.vscode/
+.idea/
+.DS_Store
+logs/
+logs/*
+*.log
+.venv/
