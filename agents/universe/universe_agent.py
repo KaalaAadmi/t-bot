@@ -4,15 +4,29 @@ import os
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
+from pathlib import Path
+import sys
 
-# External dependencies (assuming you have installed these)
+# Ensure project root on sys.path so 'pkg' imports work when running this file directly
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+    
+# External dependencies
 from kiteconnect import KiteConnect
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+# You may need to import Service or ChromeDriverManager if not using standard PATH
+# from selenium.webdriver.chrome.service import Service
+# from webdriver_manager.chrome import ChromeDriverManager 
+
+from pkg.config.config_loader import load_settings
+from dotenv import dotenv_values
+from pkg.zerodha.client import login
 
 # Initialize logger (using 'root' for consistency with main.py)
 logger = logging.getLogger(__name__)
@@ -27,120 +41,165 @@ class UniverseAgent:
         self.settings = settings
         # The path where the final map (ticker: token) will be stored
         self.output_path = settings.get('universe', {}).get('file_path', 'data/universe_map.json')
-        # Tickers to scrape (e.g., from settings or hardcoded)
-        self.indices_to_scrape = settings.get('universe', {}).get('indices', ["NIFTY", "BANKNIFTY"])
-        self.universe_cache_days = settings.get('universe', {}).get('cache_days', 7)
-        logger.info(f"Initialized UniverseAgent. Output path: {self.output_path}")
+        # Tickers to scrape (e.g., NIFTY, BANKNIFTY)
+        self.indices_to_scrape = ['NIFTY', 'BANKNIFTY']
+        # TradingView URL template for scraping
+        # self.scrape_url_template = f"https://in.tradingview.com/symbols/NSE-{index_name}/components/"
 
+        # Constants for cleaning tickers
+        # self.NSE_SUFFIX = ".NS"
+        # self.BSE_SUFFIX = ".BO"
+        logger.info("Initialized UniverseAgent.")
 
-    def load_universe_map(self) -> Optional[Dict[str, int]]:
+    # def clean_ticker(self, ticker_full: str) -> str:
+    #     """Removes the exchange suffix (.NS, .BO, etc.) from the ticker name."""
+    #     if ticker_full.endswith(self.NSE_SUFFIX):
+    #         return ticker_full[:-len(self.NSE_SUFFIX)]
+    #     if ticker_full.endswith(self.BSE_SUFFIX):
+    #         return ticker_full[:-len(self.BSE_SUFFIX)]
+    #     return ticker_full
+
+    def get_tickers(self, index_name: str) -> List[str]:
         """
-        Loads the saved ticker-token map from disk if it's recent enough.
-        Returns None if the file is missing or too old.
+        Scrapes a specific index component list from TradingView using Selenium.
+        Args:
+            index_name (str): The name of the index (e.g., 'NIFTY').
+        Returns:
+            list: A list of scraped and cleaned ticker symbols.
         """
-        if not os.path.exists(self.output_path):
-            logger.info("Universe map file not found. Starting scrape.")
-            return None
-
-        # Check file age
-        file_mod_time = datetime.fromtimestamp(os.path.getmtime(self.output_path))
-        if datetime.now() - file_mod_time > timedelta(days=self.universe_cache_days):
-            logger.info(f"Universe map is older than {self.universe_cache_days} days. Starting scrape.")
-            return None
-
+        options = Options()
+        options.add_argument("--headless")  # Run in headless mode (CRITICAL for servers)
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        # Add a user agent to avoid bot detection
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        
+        # Construct the URL
+        url = f"https://in.tradingview.com/symbols/NSE-{index_name}/components/"
+        
+        # Initialize the driver
+        driver = None
         try:
-            with open(self.output_path, 'r') as f:
-                universe_map = json.load(f)
-                logger.info(f"Loaded {len(universe_map)} tickers from cache. File age: {datetime.now() - file_mod_time}")
-                # Ensure tokens are integers
-                return {k: int(v) for k, v in universe_map.items()}
-        except Exception as e:
-            logger.error(f"Error loading universe map from file: {e}. Re-scraping.")
-            return None
+            # Assumes chromedriver is available in the system PATH or container environment
+            driver = webdriver.Chrome(options=options) 
+            logger.info(f"Navigating to {url} to scrape {index_name} tickers.")
+            driver.get(url)
+
+            # Wait for the main data table to load (look for the ticker link elements)
+            # The XPATH is from the original file, targeting the anchor tags for symbols
+            wait_selector = ".screener-container-is-scrolled-to-end"
+            wait = WebDriverWait(driver, 120)  # Wait up to 120 seconds
+            wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, wait_selector)))
+            # The .tickerName-GrtoTeat selector from the Go code finds the ticker elements
+            ticker_selector = ".tickerName-GrtoTeat"
+            ticker_elements = driver.find_elements(By.CSS_SELECTOR, ticker_selector)
             
-    # --- Scraping Logic (Kept mostly as-is, but simplified) ---
-    def get_tickers(self, ticker_type: str) -> List[str]:
-        """Scrapes a specific index from TradingView using Selenium (simplified)."""
-        logger.warning(f"SCRAPING MOCK: Using a placeholder for {ticker_type} scraping. If this were real, Selenium would run here.")
-        # NOTE: Since running Selenium in a Docker container can be complex, this is MOCKED.
-        # In a real setup, you'd ensure Chromium and its driver are correctly set up in the Dockerfile.
+            tickers = [el.text.strip() for el in ticker_elements]
+            logger.info(f"Scraped {len(tickers)} tickers for {index_name}")
+            
+            # Clean and filter the tickers, similar to the Go code's post-processing
+            cleaned_tickers = [ticker for ticker in tickers if ticker]
 
-        if ticker_type == "NIFTY":
-            return ["RELIANCE", "HDFC", "INFY"]
-        elif ticker_type == "BANKNIFTY":
-            return ["HDFCBANK", "ICICIBANK", "AXISBANK"]
-        return []
+            # Apply specific replacements
+            for i, ticker in enumerate(cleaned_tickers):
+                if ticker == "BAJAJ_AUTO":
+                    cleaned_tickers[i] = "BAJAJ-AUTO"
+                # Handle other cases if needed, e.g., M&M
+                elif ticker == "M&M":
+                    cleaned_tickers[i] = "M&M"
+            
+            return cleaned_tickers
+            
+        except TimeoutException:
+            logger.error(f"Timed out waiting for page elements on {url}")
+            return []
+        except Exception as e:
+            logger.error(f"An error occurred while scraping {url}: {e}")
+            return []
+        finally:
+            if driver:
+                driver.quit()
 
+    # --- Other Methods (No changes needed, but included for context) ---
     def get_instrument_tokens(self, tickers: List[str]) -> Dict[str, int]:
         """
-        Fetches the complete list of instruments and maps the given tickers to their tokens.
-        
-        Note: This is an expensive API call and should be cached.
+        Takes a list of base tickers and fetches their instrument token map 
+        from the Zerodha Kite API.
         """
-        if not tickers:
-            return {}
-            
-        logger.info("Fetching all instruments data from Kite API for token mapping...")
+        logger.info(f"Fetching instrument tokens for {len(tickers)} tickers...")
         try:
-            # Get all instruments tradable on NSE
-            all_instruments = self.kc.instruments('NSE')
+            instrument_list = self.kc.instruments('NSE')  # Filtered to NSE
         except Exception as e:
-            logger.error(f"Failed to fetch instruments from Kite API: {e}")
+            logger.error(f"Failed to fetch instrument list from Kite: {e}")
             return {}
-
-        # Convert to DataFrame for efficient lookup
-        df = pd.DataFrame(all_instruments)
         
-        # Filter for the specific tickers and exchange (NSE equity)
-        universe_map = {}
+        # Build lookup: only NSE cash-equity (instrument_type == 'EQ')
+        instrument_map = {
+            ins['tradingsymbol'].upper(): int(ins['instrument_token'])
+            for ins in instrument_list
+            if ins.get('exchange') == 'NSE' and ins.get('instrument_type') == 'EQ'
+        }
+
+        ticker_token_map: Dict[str, int] = {}
+        missing: List[str] = []
         for ticker in tickers:
-            # Match the ticker symbol and ensure it's an equity instrument
-            match = df[(df['tradingsymbol'] == ticker) & (df['segment'] == 'NSE') & (df['instrument_type'] == 'EQ')]
-            
-            if not match.empty:
-                # Take the first match and get the token
-                token = int(match.iloc[0]['instrument_token'])
-                universe_map[ticker] = token
+            key = ticker.strip().upper().replace('_', '-')  # normalize common variants
+            token = instrument_map.get(key)
+            if token:
+                ticker_token_map[key] = token
             else:
-                logger.warning(f"Instrument token not found for ticker: {ticker}. Skipping.")
-        
-        logger.info(f"Successfully mapped {len(universe_map)} out of {len(tickers)} symbols to tokens.")
-        return universe_map
+                missing.append(ticker)
 
+        if missing:
+            logger.warning(f"{len(missing)} tickers not found on NSE EQ: {missing[:10]}{' ...' if len(missing) > 10 else ''}")
+            
+        logger.info(f"Successfully mapped {len(ticker_token_map)} tickers to tokens.")
+        return ticker_token_map
 
-    def save_universe_map(self, universe_map: Dict[str, int]):
-        """Saves the ticker-token map to a JSON file."""
+    def deduplicate_tickers(self, tickers):
+        """
+        Deduplicates a list of tickers.
+        Args:
+            tickers (list): List of ticker symbols.
+        Returns:
+            list: Deduplicated list of ticker symbols.
+        """
+        return list(set(tickers))
+    
+    def save_universe_map(self, ticker_token_map: Dict[str, int]):
+        """
+        Saves the final ticker-token map to a JSON file.
+        """
         directory = os.path.dirname(self.output_path)
         if not os.path.exists(directory):
             os.makedirs(directory)
             logger.info(f"Created directory: {directory}")
 
-        # Convert int tokens back to string for clean JSON saving
         with open(self.output_path, 'w') as f:
-            json.dump({k: str(v) for k, v in universe_map.items()}, f, indent=4)
-            logger.info(f"Saved {len(universe_map)} Ticker-Token pairs to {self.output_path}")
-        
+            json.dump(ticker_token_map, f, indent=4)
+            logger.info(f"Saved {len(ticker_token_map)} instruments to {self.output_path}")
+
     def run(self) -> Dict[str, int]:
         """
-        Main function to orchestrate the universe update process.
-        Returns the final {TICKER: TOKEN} map.
+        Orchestrates the scraping, token mapping, and saving of the trading universe.
         """
-        logger.info("Starting UniverseAgent run to update ticker-token map.")
+        logger.info("Starting Universe Update: Scraping component tickers...")
         
         # 1. Scrape Tickers
         all_tickers = []
         for index in self.indices_to_scrape:
-            # This is the actual web scraping call (currently mocked)
+            # This is now the actual web scraping call
             tickers = self.get_tickers(index)
             if tickers:
                 all_tickers.extend(tickers)
-        
+                
         if not all_tickers:
-            logger.error("Failed to scrape any tickers from any index. Cannot proceed.")
+            logger.error("Failed to scrape any tickers from any index. Cannot proceed with token mapping.")
             return {}
-
-        # Deduplicate and clean (assuming deduplicate_tickers is an existing helper or built into get_instrument_tokens)
-        unique_tickers = list(set(all_tickers))
+        
+        # Deduplicate and clean (simple set conversion is enough for deduplication)
+        unique_tickers = self.deduplicate_tickers(all_tickers)
+        logger.info(f"Total unique tickers scraped: {len(unique_tickers)}")
 
         # 2. Get Instrument Tokens from Kite API
         ticker_token_map = self.get_instrument_tokens(unique_tickers)
@@ -150,3 +209,16 @@ class UniverseAgent:
             self.save_universe_map(ticker_token_map)
             
         return ticker_token_map
+
+if __name__=="__main__":
+    # Example usage (this would normally be in main.py)
+    from kiteconnect import KiteConnect
+    
+    # Mock settings and KiteConnect client for demonstration
+    settings = load_settings()  # Assume this function loads your settings
+    config = dotenv_values('.env')
+    kc_client=login(settings=settings)
+
+    universe_agent = UniverseAgent(kc_client=kc_client, settings=settings)
+    universe_map = universe_agent.run()
+    print(universe_map)
