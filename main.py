@@ -155,7 +155,7 @@ async def main():
     # Instantiate the Universe Agent once for scheduling
     universe_agent_scheduled = UniverseAgent(kc_client=kc, settings=settings)
     
-    # Schedule the UniverseAgent to run every weekday at 8:00 AM IST
+    # Schedule the UniverseAgent to run every weekday at 8:05 AM IST
     scheduler.add_job(
         universe_agent_scheduled.run, 
         'cron', 
@@ -166,8 +166,8 @@ async def main():
         name='Daily_Universe_Update'
     )
     # scheduler.start()
-    logger.info("Universe Agent scheduled to run weekdays at 8:00 AM IST.")
-    
+    logger.info("Universe Agent scheduled to run weekdays at 8:05 AM IST.")
+
     # 9. Initialize and Run Data Collector Agent
     data_collector_agent = DataCollectorAgent(
         kc_client=kc, 

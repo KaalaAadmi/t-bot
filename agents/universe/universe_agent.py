@@ -179,6 +179,53 @@ class UniverseAgent:
             json.dump(ticker_token_map, f, indent=4)
             logger.info(f"Saved {len(ticker_token_map)} instruments to {self.output_path}")
 
+    def load_universe_map(self) -> Optional[Dict[str, int]]:
+        """
+        Load the cached ticker-token map from disk.
+        Returns:
+            Dict[str, int] if available and valid; otherwise None.
+        """
+        path = self.output_path
+        try:
+            if not path:
+                logger.error("Universe map path is not configured in settings.")
+                return None
+
+            if not os.path.isfile(path):
+                logger.info(f"Universe map not found at {path}.")
+                return None
+
+            with open(path, "r") as f:
+                data = json.load(f)
+
+            if not isinstance(data, dict):
+                logger.warning(f"Universe map at {path} is not a dict. Ignoring.")
+                return None
+
+            normalized: Dict[str, int] = {}
+            for k, v in data.items():
+                if k is None:
+                    continue
+                key = str(k).strip().upper().replace("_", "-")
+                try:
+                    normalized[key] = int(v)
+                except (TypeError, ValueError):
+                    logger.warning(f"Invalid token for {k}: {v}. Skipping.")
+
+            if not normalized:
+                logger.info("Universe map file is empty after normalization.")
+                return None
+
+            logger.info(f"Loaded {len(normalized)} instruments from {path}")
+            return normalized
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse universe map JSON at {path}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error loading universe map from {path}: {e}")
+            return None
+        
     def run(self) -> Dict[str, int]:
         """
         Orchestrates the scraping, token mapping, and saving of the trading universe.
