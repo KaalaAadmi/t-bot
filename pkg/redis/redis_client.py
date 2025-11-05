@@ -10,7 +10,17 @@ class RedisClient:
     """A client for managing Redis connection, streams, and publishing."""
     def __init__(self, host: str, port: int, db: int):
         """Initializes the Redis connection pool."""
-        self._pool = redis.ConnectionPool(host=host, port=port, db=db, decode_responses=True)
+        self.host = host # Storing host and port for logging
+        self.port = port
+        self.db = db
+        # Use a reasonable connection timeout
+        self._pool = redis.ConnectionPool(
+            host=host, 
+            port=port, 
+            db=db, 
+            decode_responses=True,
+            socket_timeout=5 # Add a connection timeout
+        )
         self.r = redis.Redis(connection_pool=self._pool)
         logger.info(f"Redis connection pool initialized at {host}:{port}/{db}.")
         
@@ -21,7 +31,8 @@ class RedisClient:
             logger.info("Successfully connected to Redis and connection is healthy.")
             return True
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            # Enhanced error message to show the connection details
+            logger.error(f"Failed to connect to Redis at {self.host}:{self.port}/{self.db}. Error: {e}")
             return False
 
     def initialize_streams(self, stream_names: list) -> None:
