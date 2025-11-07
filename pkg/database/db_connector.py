@@ -21,7 +21,8 @@ class DBConnector:
         """Establishes the connection to the PostgreSQL database."""
         if self.conn and not self.conn.closed:
             return self.conn
-            
+        print("Establishing new database connection...")
+        print(f"DB Config: {self.db_config}")  # Debugging line to verify config
         try:
             self.conn = psycopg2.connect(
                 host=self.db_config['host'],
@@ -54,6 +55,9 @@ class DBConnector:
             return
 
         try:
+            # --- FIX: Move TimeScaleDB Extension check here (ensures it's enabled early) ---
+            self._check_and_enable_timescale_extension()
+            
             # 1. Check/Create the base tables
             self._create_one_min_candles_table()
             self._create_orb_ranges_table()
@@ -62,7 +66,7 @@ class DBConnector:
             self._convert_to_hypertable('one_min_candles', 'timestamp')
             
             # Since ORB ranges also contain a timestamp, they should probably be a hypertable too
-            # self._convert_to_hypertable('orb_ranges', 'timestamp') 
+            self._convert_to_hypertable('orb_ranges', 'timestamp') 
 
         except Exception as e:
             # This catch block will now likely be hit if a table creation error occurs
@@ -116,21 +120,23 @@ class DBConnector:
 
         # --- FIX: Create the functional unique index as a separate statement ---
         daily_unique_index_query = sql.SQL("""
-            -- This index enforces that we only have one daily record per ticker. 
-            -- Note: We use IF NOT EXISTS to prevent errors if it already exists.
             CREATE UNIQUE INDEX IF NOT EXISTS one_min_candles_date_ticker_idx
-            ON one_min_candles (DATE(timestamp), ticker);
+            ON one_min_candles (date_trunc('day', timestamp AT TIME ZONE 'UTC'), ticker);
         """)
-
-        self._execute_query(
-            one_min_candles_table_creation_query, 
-            log_success="Table 'one_min_candles' checked/created successfully."
-        )
-        # Execute the separate, corrected index creation query
-        self._execute_query(
-            daily_unique_index_query, 
-            log_success="Functional unique index created/verified on 'one_min_candles'."
-        )
+        try:
+            self._execute_query(
+                one_min_candles_table_creation_query, 
+                log_success="Table 'one_min_candles' checked/created successfully."
+            )
+            logger.info("1-Minute candles table created successfully.")
+            # Execute the separate, corrected index creation query
+            self._execute_query(
+                daily_unique_index_query, 
+                log_success="Functional unique index created/verified on 'one_min_candles'."
+            )
+            logger.info("Functional unique index created successfully.")
+        except Exception as e:
+            logger.info(f"Error creating functional unique index on 'one_min_candles': {e}")
 
     def _create_orb_ranges_table(self):
         """Creates the orb_ranges table."""
@@ -145,15 +151,18 @@ class DBConnector:
                 orb_low NUMERIC(10, 2) NOT NULL,
                 orb_range_size NUMERIC(10, 2) NOT NULL,
                 orb_volume INTEGER NOT NULL,
-                -- Primary key is a composite key on the date part of timestamp and ticker
-                PRIMARY KEY (DATE(timestamp), ticker)
+                PRIMARY KEY (DATE(timestamp AT TIME ZONE 'UTC'), ticker)
             );
         """)
-        self._execute_query(
-            orb_table_creation_query, 
-            log_success="Table 'orb_ranges' checked/created successfully."
-        )
-            
+        try:
+            self._execute_query(
+                orb_table_creation_query, 
+                log_success="Table 'orb_ranges' checked/created successfully."
+            )
+            logger.info("ORB ranges table created successfully.")
+        except Exception as e:
+            logger.info(f"Error creating 'orb_ranges' table: {e}")
+
     def _convert_to_hypertable(self, table_name: str, time_column: str):
         """Converts a standard PostgreSQL table into a TimeScaleDB hypertable."""
         # Ensure the extension is enabled first

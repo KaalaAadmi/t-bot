@@ -293,7 +293,7 @@ class DataCollectorAgent:
                 self.db.insert_data('orb_ranges', [db_record])
             except Exception as e:
                 logger.error(f"Failed to insert ORB data for {ticker_name} into DB: {e}")
-        
+            logger.info(f"ORB for {ticker_name}: High={orb_high}, Low={orb_low}, Range={orb_high - orb_low}")
         # Clear the ORB cache after calculation is complete for the day
         self.orb_candles.clear()
         logger.info(f"Completed ORB calculation for {len(orb_results)} instruments. ORB cache cleared.")

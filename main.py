@@ -90,6 +90,7 @@ async def main():
     
     # 2. Load Configuration
     settings = load_settings()
+    print(f"Loaded Settings: {settings}")  # For debugging purposes
     logger.info(f"Settings loaded for environment: {settings['environment']}")
     
     # 3. Initialize Zerodha Client and Login
