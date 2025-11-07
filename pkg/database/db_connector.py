@@ -22,7 +22,6 @@ class DBConnector:
         if self.conn and not self.conn.closed:
             return self.conn
         print("Establishing new database connection...")
-        print(f"DB Config: {self.db_config}")  # Debugging line to verify config
         try:
             self.conn = psycopg2.connect(
                 host=self.db_config['host'],
@@ -66,7 +65,7 @@ class DBConnector:
             self._convert_to_hypertable('one_min_candles', 'timestamp')
             
             # Since ORB ranges also contain a timestamp, they should probably be a hypertable too
-            self._convert_to_hypertable('orb_ranges', 'timestamp') 
+            # self._convert_to_hypertable('orb_ranges', 'timestamp') 
 
         except Exception as e:
             # This catch block will now likely be hit if a table creation error occurs
@@ -99,30 +98,27 @@ class DBConnector:
             logger.error(f"Failed to enable TimeScaleDB extension: {e}")
             
     def _create_one_min_candles_table(self):
-        """Creates the one_min_candles table and the necessary functional unique index."""
-        # This table stores 1-minute OHLCV data.
-        # --- FIX APPLIED HERE: Removed invalid UNIQUE constraint from inline table definition ---
+        """Creates the one_min_candles table."""
         one_min_candles_table_creation_query = sql.SQL("""
             CREATE TABLE IF NOT EXISTS one_min_candles (
                 timestamp TIMESTAMPTZ NOT NULL,
-                ticker VARCHAR(10) NOT NULL,
+                ticker TEXT NOT NULL,  -- FIX 4: Changed VARCHAR(10) to TEXT
                 token INTEGER NOT NULL,
                 open NUMERIC(10, 2) NOT NULL,
                 high NUMERIC(10, 2) NOT NULL,
                 low NUMERIC(10, 2) NOT NULL,
                 close NUMERIC(10, 2) NOT NULL,
                 volume INTEGER NOT NULL,
-                interval VARCHAR(5) NOT NULL,
+                interval TEXT NOT NULL, -- FIX 4: Changed VARCHAR(5) to TEXT
                 PRIMARY KEY (timestamp, ticker)
-                -- REMOVED: UNIQUE (DATE(timestamp), ticker) <-- This was the error
             );
         """)
 
         # --- FIX: Create the functional unique index as a separate statement ---
-        daily_unique_index_query = sql.SQL("""
-            CREATE UNIQUE INDEX IF NOT EXISTS one_min_candles_date_ticker_idx
-            ON one_min_candles (date_trunc('day', timestamp AT TIME ZONE 'UTC'), ticker);
-        """)
+        # daily_unique_index_query = sql.SQL("""
+        #     CREATE UNIQUE INDEX IF NOT EXISTS one_min_candles_date_ticker_idx
+        #     ON one_min_candles (date_trunc('day', timestamp AT TIME ZONE 'UTC'), ticker);
+        # """)
         try:
             self._execute_query(
                 one_min_candles_table_creation_query, 
@@ -130,38 +126,49 @@ class DBConnector:
             )
             logger.info("1-Minute candles table created successfully.")
             # Execute the separate, corrected index creation query
-            self._execute_query(
-                daily_unique_index_query, 
-                log_success="Functional unique index created/verified on 'one_min_candles'."
-            )
-            logger.info("Functional unique index created successfully.")
+            # self._execute_query(
+            #     daily_unique_index_query, 
+            #     log_success="Functional unique index created/verified on 'one_min_candles'."
+            # )
+            # logger.info("Functional unique index created successfully.")
         except Exception as e:
             logger.info(f"Error creating functional unique index on 'one_min_candles': {e}")
 
     def _create_orb_ranges_table(self):
         """Creates the orb_ranges table."""
-        # This table stores daily Open Range Breakout (ORB) data.
-        # The unique constraint is enforced on the primary key (date-ticker combination).
         orb_table_creation_query = sql.SQL("""
             CREATE TABLE IF NOT EXISTS orb_ranges (
                 timestamp TIMESTAMPTZ NOT NULL,
-                ticker VARCHAR(10) NOT NULL,
+                ticker TEXT NOT NULL,  -- FIX 4: Changed VARCHAR(10) to TEXT
                 token INTEGER NOT NULL,
                 orb_high NUMERIC(10, 2) NOT NULL,
                 orb_low NUMERIC(10, 2) NOT NULL,
                 orb_range_size NUMERIC(10, 2) NOT NULL,
                 orb_volume INTEGER NOT NULL,
-                PRIMARY KEY (DATE(timestamp AT TIME ZONE 'UTC'), ticker)
+                PRIMARY KEY (timestamp, ticker)
             );
         """)
+
+        # FIX 3b: Create the unique functional index separately for daily uniqueness
+        daily_unique_index_query = sql.SQL("""
+            CREATE UNIQUE INDEX IF NOT EXISTS orb_ranges_date_ticker_idx
+            ON orb_ranges (DATE(timestamp AT TIME ZONE 'UTC'), ticker);
+        """)
+        
         try:
             self._execute_query(
                 orb_table_creation_query, 
                 log_success="Table 'orb_ranges' checked/created successfully."
             )
             logger.info("ORB ranges table created successfully.")
+            # Execute the separate functional unique index creation query
+            self._execute_query(
+                daily_unique_index_query, 
+                log_success="Functional unique index created/verified on 'orb_ranges'."
+            )
+            logger.info("Functional unique index created successfully.")
         except Exception as e:
-            logger.info(f"Error creating 'orb_ranges' table: {e}")
+            logger.info(f"Error creating 'orb_ranges' table or index: {e}")
 
     def _convert_to_hypertable(self, table_name: str, time_column: str):
         """Converts a standard PostgreSQL table into a TimeScaleDB hypertable."""
@@ -218,17 +225,16 @@ class DBConnector:
 
     def insert_orb_range(self, orb_data: Dict[str, Any]):
         """Inserts a single ORB range record into the database."""
-        if not self.conn:
-            logger.error("Cannot insert ORB range: Database connection is not established.")
-            return
+        # ... (omitted connection check)
 
-        # Uses ON CONFLICT on the functional index (DATE(timestamp), ticker)
+        # FIX 3c: Change ON CONFLICT to use the new simple primary key
+        # We rely on the unique functional index to prevent duplicate dates.
         query = sql.SQL("""
             INSERT INTO orb_ranges (
                 timestamp, ticker, token, orb_high, orb_low, orb_range_size, orb_volume
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s
-            ) ON CONFLICT (DATE(timestamp), ticker) DO NOTHING;
+            ) ON CONFLICT (timestamp, ticker) DO NOTHING;
         """)
 
         try:
