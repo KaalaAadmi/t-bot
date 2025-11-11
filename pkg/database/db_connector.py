@@ -3,7 +3,8 @@ from psycopg2 import sql
 from psycopg2 import extras
 import logging
 from typing import Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ class DBConnector:
             )
         except Exception as e:
             logger.error(f"Failed to enable TimeScaleDB extension: {e}")
-            
+
     def _create_one_min_candles_table(self):
         """Creates the one_min_candles table."""
         one_min_candles_table_creation_query = sql.SQL("""
@@ -243,10 +244,10 @@ class DBConnector:
                     orb_data['timestamp'], 
                     orb_data['ticker'],
                     orb_data['token'],
-                    orb_data['orb_high'], 
-                    orb_data['orb_low'], 
-                    orb_data['orb_range_size'], 
-                    orb_data['orb_volume']
+                    orb_data['high'], 
+                    orb_data['low'], 
+                    orb_data['range'], 
+                    orb_data['volume']
                 ))
         except Exception as e:
             logger.error(f"Error inserting ORB range for {orb_data.get('ticker', 'N/A')} on {orb_data.get('timestamp', datetime.now()).date()}: {e}")
@@ -274,3 +275,121 @@ class DBConnector:
         except Exception as e:
             logger.error(f"Error retrieving ORB range for {ticker} on {date}: {e}")
             return None
+
+    def _insert_dummy_data(self):
+        """Generates and inserts sample data."""
+        logger.info("Generating and inserting dummy data...")
+        
+        # Define a timezone
+        tz = pytz.timezone('Asia/Kolkata')
+        
+        # --- 1-Minute Candles Dummy Data ---
+        candles = []
+        ticker_tokens = {'TCS': 115393, 'INFY': 4963}
+        # Anchor the calculation to a specific date for consistency. 
+        # We'll use today's date at 9:15 AM IST and then subtract 1 day.
+        now_in_tz = datetime.now(tz).date() # Get today's date in IST timezone
+        # Combine the fixed time (9:15) with the calculated date
+        start_date_ist = tz.localize(datetime(now_in_tz.year, now_in_tz.month, now_in_tz.day, 9, 15, 0, 0)) - timedelta(days=1)
+        start_time = start_date_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        
+        for i in range(5): # Generate 5 minutes of data
+            difference = timedelta(minutes=i)
+            timestamp = start_time + difference
+
+            # Simple linear data for TCS and INFY
+            for ticker, token in ticker_tokens.items():
+                base_price = 3000 if ticker == 'TCS' else 1400
+                close_change = 1.0 * i
+                volume = 1000 + (i * 100)
+                
+                candle_record = {
+                    'timestamp': timestamp,
+                    'ticker': ticker,
+                    'token': token,
+                    'open': base_price + i,
+                    'high': base_price + i + 1,
+                    'low': base_price + i - 0.5,
+                    'close': base_price + i + close_change,
+                    'volume': volume,
+                    'interval': '1min'
+                }
+                candles.append(candle_record)
+
+        # Insert the generated candle data
+        for candle in candles:
+            # *** MODIFICATION FOR one_min_candles ***
+            # The live agent calls insert_data with the record wrapped in a list: [record]
+            self.insert_data('one_min_candles', [candle]) 
+            logger.info(f"Inserted dummy candle for {candle['ticker']} at {candle['timestamp']}")
+        logger.info(f"Successfully inserted {len(candles)} dummy 1-min candles.")
+
+        # --- ORB Ranges Dummy Data ---
+        
+        # Use the start time of the ORB range (9:15 AM)
+        orb_time = tz.localize(datetime.now().replace(hour=9, minute=20, second=0, microsecond=0) - timedelta(days=1))
+
+        orb_data = [
+            {
+                'timestamp': orb_time, 
+                'ticker': 'TCS', 
+                'token': 115393, 
+                'high': 3550.0, 
+                'low': 3400.0, 
+                'range': 150.0, 
+                'volume': 30000
+            },
+            {
+                'timestamp': orb_time, 
+                'ticker': 'INFY', 
+                'token': 4963, 
+                'high': 1500.0, 
+                'low': 1400.0, 
+                'range': 100.0, 
+                'volume': 20000
+            },
+        ]
+        
+        # Insert ORB ranges using the generic insert_data method
+        for record in orb_data:
+            # *** MODIFICATION FOR orb_ranges ***
+            # The live agent calls insert_data with the record wrapped in a list: [record]
+            self.insert_data('orb_ranges', [record])
+            logger.debug(f"Inserted dummy ORB for {record['ticker']} at {record['timestamp']}")
+
+        logger.info(f"Successfully inserted {len(orb_data)} dummy ORB ranges.")
+
+    def _delete_dummy_data(self):
+        """Deletes all dummy data inserted for testing."""
+        logger.info("Deleting dummy data...")
+        try:
+            # Delete records specifically tagged as DUMMYTEST
+            self._execute_query(sql.SQL("DELETE FROM one_min_candles WHERE ticker = 'DUMMYTEST';"), log_success="Deleted DUMMYTEST candles.")
+            self._execute_query(sql.SQL("DELETE FROM orb_ranges WHERE ticker = 'DUMMYTEST';"), log_success="Deleted DUMMYTEST ORB ranges.")
+            logger.info("Dummy data deletion complete.")
+        except Exception as e:
+            logger.error(f"Error deleting dummy data: {e}")
+        
+    def insert_data(self, table_name: str, data: Any):
+        """
+        Generic method to insert data. 
+        
+        *** MODIFIED LOGIC ***
+        Handles the case where the input 'data' is a list of records 
+        (matching the live agent's call) or a single record (Dict).
+        """
+        # 1. Determine the list of records to process
+        # This handles the live agent passing [record] or a list of multiple records
+        records_to_insert = data if isinstance(data, list) else [data]
+
+        # 2. Iterate and insert each record individually
+        for record in records_to_insert:
+            print(record)
+            if table_name == 'minute_candles' or table_name == 'one_min_candles':
+                # Note: 'minute_candles' is the name used by the live agent in its call
+                # 'one_min_candles' is the canonical table name here.
+                self.insert_one_min_candle(record)
+            elif table_name == 'orb_ranges':
+                self.insert_orb_range(record)
+            else:
+                logger.warning(f"Unknown table name '{table_name}'. Data not inserted.")

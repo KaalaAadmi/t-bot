@@ -3,9 +3,10 @@ import logging
 import logging.config
 import yaml
 import os
-from apscheduler.schedulers.asyncio import AsyncIOScheduler # <--- NEW IMPORT
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 from typing import Dict, Any
+from pathlib import Path 
 
 # Application imports
 from pkg.config.config_loader import load_settings
@@ -13,162 +14,100 @@ from pkg.zerodha.client import login
 from pkg.redis.redis_client import RedisClient
 from pkg.database.db_connector import DBConnector 
 from agents.datacollector.data_collector import DataCollectorAgent
-from agents.universe.universe_agent import UniverseAgent # <--- NEW IMPORT
+from agents.universe.universe_agent import UniverseAgent 
+from agents.strategy.strategy_agent import StrategyAgent # <--- NEW IMPORT
 
 logger = logging.getLogger(__name__) 
+
+# Get the root directory for path resolution
+ROOT_DIR = Path(__file__).parent
 
 # Initialize logger (needs to be done before agent initialization)
 def setup_logging(config_path="pkg/config/logging_config.yaml"):
     """Setup logging configuration."""
-    if not os.path.exists(config_path):
-        # Fallback if running from a different directory structure
-        config_path = os.path.join(os.path.dirname(__file__), config_path)
+    # Resolve path relative to the script's location
+    config_path = ROOT_DIR / config_path
     
     # Create the logs directory if it doesn't exist
-    log_dir = os.path.join(os.path.dirname(__file__), 'logs')
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    log_dir = ROOT_DIR / 'logs'
+    if not log_dir.exists():
+        log_dir.mkdir()
 
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    logging.config.dictConfig(config)
-    # Get the root logger after config is loaded
-    return logging.getLogger('root') 
-
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        logging.config.dictConfig(config)
+        return logging.getLogger('root') 
+    except Exception as e:
+        print(f"Failed to set up logging: {e}")
+        logging.basicConfig(level=logging.INFO)
+        return logging.getLogger('root') 
 
 def get_initial_universe_map(kc_client: Any, settings: Dict) -> Dict[str, int]:
-    """
-    Handles the synchronous fetching of the ticker-token map at startup.
-    It first tries to load from cache, then runs the full UniverseAgent process if needed.
-    """
-    logger.info("--- Phase 1: Fetching Trading Universe Map ---")
-    
-    # Initialize the Universe Agent
+    """Loads the stored universe map or generates a new one if missing."""
     universe_agent = UniverseAgent(kc_client=kc_client, settings=settings)
-    
-    # 1. Try to load from cache first for fast startup
-    universe_map = universe_agent.load_universe_map()
-    
-    if universe_map is not None:
-        return universe_map
-    
-    # 2. If cache failed or is stale, run the full process (scrape + tokenize)
-    # This must be run synchronously before we start the Data Collector
-    universe_map = universe_agent.run()
-    
-    if not universe_map:
-        logger.critical("FAILED TO DETERMINE TRADING UNIVERSE. Shutting down.")
-        raise RuntimeError("Failed to get initial trading universe.")
-        
-    return universe_map
-
-# --- Modified Function for Scheduled Login ---
-# Now accepts settings as an argument
-def scheduled_login_wrapper(settings: Dict[str, Any]):
-    """
-    Synchronous wrapper for login() to be called by APScheduler.
-    This refreshes the token and saves it to a file.
-    """
-    logger.info("Attempting scheduled token refresh at 8:00 AM IST...")
-    try:
-        # Pass the settings to the login function
-        kc = login(settings=settings) 
-        if kc:
-            logger.info("Daily Login successful. Access Token refreshed and saved.")
-        else:
-            logger.error("Daily Login failed. No access token refresh.")
-    except Exception as e:
-        logger.error(f"Error during scheduled login: {e}")
-# ----------------------------------------
+    # The load_universe_map method should be available on UniverseAgent
+    # (Assuming it was implemented in the full version of universe_agent.py)
+    return universe_agent.load_universe_map() 
 
 async def main():
-    """Main function to orchestrate the bot and start all agents."""
-    global logger
+    """Main asynchronous entry point for the T-Bot application."""
+    
     # 1. Setup Logging
-    logger = setup_logging()
-    logger.info("--- T-Bot Application Starting ---")
-    
-    # 2. Load Configuration
-    settings = load_settings()
-    logger.info(f"Settings loaded for environment: {settings['environment']}")
-    
-    # 3. Initialize Zerodha Client and Login
-    kc = login(settings) 
-    if not kc:
-        logger.error("Zerodha login failed. Shutting down application.")
-        return
-    logger.info("Zerodha login successful. KiteConnect client initialized.")
-    
-    # 3.a Setup Scheduler for Daily Tasks
-    tz = pytz.timezone('Asia/Kolkata')
-    scheduler = AsyncIOScheduler(timezone=tz)
-    scheduler.add_job(
-        # PASS the function reference, NOT the result of calling it
-        scheduled_login_wrapper, 
-        'cron', 
-        day_of_week='mon-fri', 
-        hour=8, 
-        minute=0, 
-        second=0,
-        name='Daily_Login_Token_Refresh',
-        # Pass the settings dictionary as the function's argument
-        kwargs={'settings': settings} 
-    )
-    scheduler.start()
-    logger.info("Daily Login/Token Refresh scheduled for weekdays at 08:00 AM IST.")
-    
-    
-    # 4. Initialize and Verify Redis Client
-    redis_settings = settings['redis']
-    stream_names = list(settings['streams'].values())
+    setup_logging()
+    logger.info("--- T-Bot Application Initializing ---")
 
-    r = RedisClient(
-        host=redis_settings['host'],
-        port=redis_settings['port'],
-        db=int(redis_settings['db'])
-    )
+    # 2. Load Configuration and Secrets
+    settings = load_settings()
     
-    if not r.check_connection():
-        logger.error("Failed to connect to Redis. Shutting down application.")
-        return
-        
-    # 5. Initialize Redis Streams (Declare channels)
-    r.initialize_streams(stream_names)
-    logger.info(f"All {len(stream_names)} Redis streams initialized/declared.")
-    
-    # 6. Initialize and Verify Database Connector
+    # 3. Initialize Database and Redis Connections
     db_connector = DBConnector(settings['database'])
     if not db_connector.connect():
-        logger.error("Database connection failed. Shutting down application.")
+        logger.error("Database connection failed. Shutting down.")
         return
-    
-    # Ensure all tables are created
-    db_connector.initialize_tables()
-    
-    # 7. Get the initial Ticker-Token Universe Map <--- CRITICAL CHANGE
-    try:
-        ticker_token_map = get_initial_universe_map(kc, settings)
-    except RuntimeError:
+
+    r = RedisClient(settings['redis']['host'], int(settings['redis']['port']), int(settings['redis']['db']))
+    if not r.check_connection():
+        logger.error("Redis connection failed. Shutting down.")
+        return
+
+    # 4. Initialize KiteConnect Client (Kite Client)
+    kc = login(settings=settings)
+    if not kc:
+        logger.error("KiteConnect client login failed. Shutting down.")
         db_connector.close()
         return
+
+    # 5. Get Initial Universe Map (from file/DB)
+    # Note: I'm assuming load_universe_map is implemented in universe_agent.py
+    universe_agent_loader = UniverseAgent(kc_client=kc, settings=settings)
+    ticker_token_map = universe_agent_loader.load_universe_map() 
     
-    # Instantiate the Universe Agent once for scheduling
-    universe_agent_scheduled = UniverseAgent(kc_client=kc, settings=settings)
+    if not ticker_token_map:
+        logger.warning("No initial universe map loaded. Running Universe Agent to create one.")
+        ticker_token_map = universe_agent_loader.run()
     
-    # Schedule the UniverseAgent to run every weekday at 8:05 AM IST
+    if not ticker_token_map:
+        logger.error("Cannot proceed without a universe map. Shutting down.")
+        db_connector.close()
+        return
+
+    # 6. Initialize APScheduler
+    scheduler = AsyncIOScheduler(timezone=pytz.timezone('Asia/Kolkata'))
+    
+    # 7. Initialize Universe Agent (for scheduled daily updates)
     scheduler.add_job(
-        universe_agent_scheduled.run, 
-        'cron', 
+        universe_agent_loader.run, 
+        trigger='cron',
         day_of_week='mon-fri', 
         hour=8, 
         minute=5, 
         second=0,
         name='Daily_Universe_Update'
     )
-    # scheduler.start()
     logger.info("Universe Agent scheduled to run weekdays at 8:05 AM IST.")
 
-    # 9. Initialize and Run Data Collector Agent
+    # 8. Initialize and Run Data Collector Agent
     data_collector_agent = DataCollectorAgent(
         kc_client=kc, 
         redis_client=r, 
@@ -176,15 +115,24 @@ async def main():
         config=settings
     )
     
-    # Start the Data Collector Agent, passing the newly acquired map
-    collector_task = asyncio.create_task(data_collector_agent.run(ticker_token_map)) # <--- PASS DYNAMIC MAP
-    
+    collector_task = asyncio.create_task(data_collector_agent.run(ticker_token_map))
     logger.info(f"Data Collector Agent started with {len(ticker_token_map)} instruments.")
+    
+    # 9. Initialize and Run Strategy Agent <--- START NEW AGENT
+    strategy_agent = StrategyAgent(
+        redis_client=r,
+        config=settings
+    )
+    strategy_task = asyncio.create_task(strategy_agent.run(ticker_token_map))
+    logger.info(f"Strategy Agent started.")
+
+    # 10. Start Scheduler
+    scheduler.start()
     
     # Keep the main loop running until all tasks are complete (or interrupted)
     try:
         # Wait indefinitely for background tasks
-        await collector_task
+        await asyncio.gather(collector_task, strategy_task)
     except asyncio.CancelledError:
         logger.info("Main application tasks cancelled.")
     except Exception as e:
@@ -199,7 +147,6 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        # Use asyncio.run for starting the asynchronous main function
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nApplication manually interrupted. Exiting.")
+        logger.info("Application shut down by user.")

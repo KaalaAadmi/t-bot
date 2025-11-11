@@ -2,7 +2,7 @@ import redis
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,34 @@ class RedisClient:
             # Enhanced error message to show the connection details
             logger.error(f"Failed to connect to Redis at {self.host}:{self.port}/{self.db}. Error: {e}")
             return False
+
+    def create_consumer_group(self, stream_name: str, group_name: str, mkstream: bool = True):
+        """Creates a consumer group for a given stream, if it does not already exist."""
+        try:
+            # Check if the group already exists
+            info = self.r.xinfo_groups(stream_name)
+            if not any(group['name'] == group_name for group in info):
+                # Create the group. '0' means start reading from the beginning.
+                self.r.xgroup_create(
+                    name=stream_name, 
+                    groupname=group_name, 
+                    id='0', 
+                    mkstream=mkstream
+                )
+                logger.info(f"Successfully created consumer group '{group_name}' on stream '{stream_name}'.")
+            else:
+                logger.debug(f"Consumer group '{group_name}' already exists on stream '{stream_name}'.")
+        except redis.exceptions.ResponseError as e:
+            # This can happen if the stream doesn't exist and mkstream=False
+            if "NOGROUP" in str(e) and not mkstream:
+                logger.warning(f"Stream {stream_name} does not exist. Cannot create group {group_name}.")
+            elif "BUSYGROUP" in str(e):
+                logger.debug(f"Consumer group '{group_name}' already exists.")
+            else:
+                logger.error(f"Error creating consumer group {group_name} on {stream_name}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error in create_consumer_group for {stream_name}: {e}")
+
 
     def initialize_streams(self, stream_names: list) -> None:
         """

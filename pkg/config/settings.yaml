@@ -45,7 +45,7 @@ logging:
   level: ${LOG_LEVEL}
 
 # General Application Settings
-environment: ${ENVIRONMENT:-development} # <-- ENSURE THIS EXISTS (or similar)
+environment: development # <-- ENSURE THIS EXISTS (or similar)
 # development -> backtesting
 # live -> testing in live market(all of the signals, for data)
 # live_functional -> testing in live market (with the ConfidenceProviderAgent, and correct implementation of PortfolioManagerAgent)
